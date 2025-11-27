@@ -17,11 +17,12 @@ load_dotenv()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-BIGQUERY_DATASET = "customer_360"
-BIGQUERY_CLEANED_DATA_TABLE = "cleaned_log_search"
-PROJECT_ID = "inner-suprstate-469409-a8"
+PROJECT_ID = os.getenv('PROJECT_ID',"radiant-saga-478604-m9")
+BIGQUERY_DATASET = os.getenv('BIGQUERY_DATASET',"customer_360")
+BIGQUERY_CLEANED_DATA_TABLE = os.getenv('BIGQUERY_CLEANED_DATA_TABLE',"cleaned_log_search")
 
-BIGQUERY_OLAP_TABLE = 'trending'
+BIGQUERY_OLAP_TABLE = os.getenv('BIGQUERY_OLAP_TABLE',"trending")
+service_account_key_path = os.getenv('service_account_key_path')
 
 # Danh sách thể loại của bạn
 
@@ -42,7 +43,10 @@ CATEGORY_LIST = [
 spark = (SparkSession.builder.appName("Explore Log Search")
         .config("spark.jars.packages", "graphframes:graphframes:0.8.1-spark3.0-s_2.12,"
                                        "com.google.cloud.spark:spark-3.5-bigquery:0.42.2")
-         .getOrCreate())
+        .config("spark.hadoop.google.cloud.auth.service.account.enable", "true")
+        .config("spark.hadoop.google.cloud.auth.service.account.json.keyfile", service_account_key_path)
+        .getOrCreate())
+
 spark.sparkContext.setCheckpointDir("./checkpoint/graphframes_checkpoints")
 
 def remove_vietnamese_accents(text):
@@ -90,14 +94,23 @@ def is_obviously_nonsense(q: str) -> bool:
         return True
 
     # 1. quá ngắn
-    if len(q) == 1:
+    if len(q) == 2:
         return True
 
-    # 2. toàn bộ là ký tự giống nhau (4 ký tự trở lên)
+    # 2.toan bo la so
+    if q.isdigit() and len(q) > 4:
+        return True
+
+    # 3. toàn bộ là ký tự giống nhau (4 ký tự trở lên)
     if re.fullmatch(r'(.)\1{3,}', q):
         return True
 
-    # 3. quá nhiều ký hiệu (ít hơn 40% là chữ cái/số)
+    # 4. Regex: r'(.)\1{4,}' tìm kiếm 5 lần lặp lại liên tiếp của BẤT KỲ ký tự nào
+    # Ví dụ: 4444488, aaaaaa, !!!!!
+    if re.fullmatch(r'(.)\1{4,}', q):
+        return True
+
+    # 4. quá nhiều ký hiệu (ít hơn 40% là chữ cái/số)
     letters_digits = sum(ch.isalnum() for ch in q)
     if letters_digits / max(1, len(q)) < 0.4:
         return True
@@ -188,7 +201,7 @@ def get_batch_categories(keywords, category_list=CATEGORY_LIST):
                 raise ValueError("Ngoặc không cân bằng")
 
             json_movie_with_category = extract_top_object(response.text.strip())
-            print(json_movie_with_category)
+
             return json.loads(json_movie_with_category)
         except Exception as e:
             print(f"Can't parse JSON from api response: {e}")
@@ -196,7 +209,6 @@ def get_batch_categories(keywords, category_list=CATEGORY_LIST):
             return None
 
 def find_movie_category(df):
-    # run quá quota gemini api rồi, hình như là nhanh quá, sleep 15 30s gì đó cho chắc
 
     df_movie_name = df.groupBy("keyword").count()
 
@@ -218,13 +230,14 @@ def find_movie_category(df):
         top_500_lst = [f"{row.keyword}" for row in rows]
         print(top_500_lst)
         movie_category_json = get_batch_categories(top_500_lst)
-        for key, value in movie_category_json.items():
-            movie_category_lst.append({"movie": key, "category": value})
+        if movie_category_json:
+            for key, value in movie_category_json.items():
+                movie_category_lst.append({"movie": key, "category": value})
 
-        if movie_category_df:
-            movie_category_df = movie_category_df.union(spark.createDataFrame(movie_category_lst))
-        else:
-            movie_category_df = spark.createDataFrame(movie_category_lst)
+            if movie_category_df:
+                movie_category_df = movie_category_df.union(spark.createDataFrame(movie_category_lst))
+            else:
+                movie_category_df = spark.createDataFrame(movie_category_lst)
 
         n += 500
         time.sleep(10)
@@ -253,9 +266,9 @@ def clean_log_search(date_from, date_to):
 
         print("------ Read from parquet ------")
         df = read_parquet(parquet_path)
-        # df.show()
+        df.show()
 
-        print(df.count())
+        # print(df.count())
         print("--------select column -------")
 
         df = select_col(df)
@@ -264,7 +277,7 @@ def clean_log_search(date_from, date_to):
         df = normalize_keyword(df)
         df = count_duplicate_keyword_by_user(df)
         df = add_date_col(df, date)
-        df.printSchema()
+
         # df.write.mode("overwrite").parquet('./cleaned_data/dates/'+date_str)
 
         # write_to_bigquery(df)
@@ -289,7 +302,7 @@ def top_trending_per_user(df_user_log_search):
 def top3_most_search_each_user_with_category(top3_most_search_each_user, category_movie: list):
 
     category_movie_df = spark.createDataFrame(category_movie)
-    category_movie_df.printSchema()
+
 
     result = top3_most_search_each_user.join(category_movie_df,
                                              top3_most_search_each_user.keyword == category_movie_df.movie,
@@ -299,27 +312,6 @@ def top3_most_search_each_user_with_category(top3_most_search_each_user, categor
     result = result.drop("movie")
 
     return result
-
-#
-# def write_to_bigquery(df):
-#     full_table_path = f"{PROJECT_ID}.{BIGQUERY_DATASET}.{BIGQUERY_CLEANED_DATA_TABLE}"
-#
-#     df_bigquery = df.select(F.col("user_id").cast(T.StringType()),
-#                              F.col("keyword").alias("keyword"),
-#                              F.col("search_times").alias("search_times"),
-#                              F.col("date").alias("datetime"))
-#
-#
-#     # df_bigquery.printSchema()
-#     (df_bigquery.write.format("bigquery")
-#      .option("table", full_table_path)
-#      .option("writeMethod", "direct")
-#      .option("parentProject", PROJECT_ID)
-#      .option("ignoreExtraFields", "true")
-#      .mode("append").save())
-#
-#     return "Ghi thành công"
-
 
 
 def write_table_log_search_with_cluster_id():
@@ -341,11 +333,7 @@ def write_table_log_search_with_cluster_id():
     return True
 
 
-def write_table_keyword_category():
-    monthstr = '202206'
-    table_name = 'keyword_category'
-    df = spark.read.csv(f'./cleaned_data/keyword_with_category/offset_api_call_202206' , header=True)
-
+def write_table_keyword_category(df, table_name = 'keyword_category'):
     df_bigquery = df.select(F.col("movie").alias("keyword"),
                             F.col("category").alias("category"))
 
@@ -355,7 +343,6 @@ def write_table_keyword_category():
      .option("table", full_table_path)
      .option("writeMethod", "direct")
      .option("parentProject", PROJECT_ID)
-
      .mode("append").save())
     return True
 
@@ -363,10 +350,10 @@ def pivot_olap_table(log_search_t6_df, log_search_t7_df , keyword_category_df):
     ## co log search , keyword & category call tu api gemini,
     # -> mapping ra  dang bang : user_id, most_search_t6, category_t6,	most_search_t7,	category_t7,	Trending_Type,	Previous
 
-    most_search_t6 = log_search_t6_df.withColumn("top", F.row_number().over(Window.partitionBy("user_id").orderBy("search_times"))).filter("top = 1")
+    most_search_t6 = log_search_t6_df.withColumn("top", F.row_number().over(Window.partitionBy("user_id").orderBy(F.col("search_times").desc()))).filter("top = 1")
 
     most_search_t7 = log_search_t7_df.withColumn("top", F.row_number().over(
-        Window.partitionBy("user_id").orderBy("search_times"))).filter("top = 1")
+        Window.partitionBy("user_id").orderBy(F.col("search_times").desc()))).filter("top = 1")
 
     most_search_t6_with_category = most_search_t6.join(keyword_category_df, on = most_search_t6['keyword'] == keyword_category_df['movie'], how="left").select(most_search_t6.user_id, 'keyword', 'category')
 
@@ -381,7 +368,7 @@ def pivot_olap_table(log_search_t6_df, log_search_t7_df , keyword_category_df):
                                                            F.col('b.keyword').alias('most_search_t7'),
                                                            F.col('b.category').alias('category_t7')).withColumn("trending_type", F.when(F.col('category_t6') == F.col('category_t7'), "unchanged").otherwise("changed") )
 
-    trending_df.printSchema()
+
     trending_df.fillna("Unknown")
     # trending_df.filter( 'category_t6 != "Unknown" and category_t7 != "Unknown"' ).show(truncate=False)
     # most_search_t6.printSchema()
@@ -400,18 +387,43 @@ def write_to_bigquery(df , table_name):
      .option("parentProject", PROJECT_ID)
      .option("ignoreExtraFields", "true")
      .mode("append").save())
-
+    return
 #
 
+def write_cleaned_log_search_to_bigquery(df , table_name):
+    full_table_path = f"{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}"
+    df_bigquery = df.select(F.col("keyword").alias("keyword"),
+                            F.col("user_id").alias("user_id"),
+                            F.col("search_times").alias("search_times"),
+                            F.col("date").cast(T.TimestampType()).alias("datetime"))
+
+    # df_bigquery.printSchema()
+    (df_bigquery.write.format("bigquery")
+     .option("table", full_table_path)
+     .option("writeMethod", "direct")
+     .option("parentProject", PROJECT_ID)
+     .option("ignoreExtraFields", "true")
+     .mode("append").save())
+    return
+
+def read_category_from_bigquery(table_name = 'keyword_category'):
+    full_table_path = f"{PROJECT_ID}.{BIGQUERY_DATASET}.{table_name}"
+
+    keyword_category_df = (spark.read.format("bigquery")
+             .option("table", full_table_path)
+             .option("writeMethod", "direct")
+             .option("parentProject", PROJECT_ID)
+             .option("ignoreExtraFields", "true").load())
+    return keyword_category_df
 
 def main():
 
     date_from_t6 = datetime.datetime(2022, 6, 1)
-    date_to_t6 = datetime.datetime(2022, 6, 1)
+    date_to_t6 = datetime.datetime(2022, 6, 15)
 
 
     date_from_t7 = datetime.datetime(2022, 7, 1)
-    date_to_t7 = datetime.datetime(2022, 7, 1)
+    date_to_t7 = datetime.datetime(2022, 7, 15)
 
     df_cleaned_t6 = clean_log_search(date_from_t6, date_to_t6)
 
@@ -421,26 +433,31 @@ def main():
 
     df_cleaned_t7 = clean_log_search(date_from_t7, date_to_t7)
     df_cleaned_data =df_cleaned_t6.union(df_cleaned_t7)
-
-    df_cleaned_data.write.mode("overwrite").option("header", True).partitionBy("date").parquet('./destination_data/cleaned_data/')
+    write_cleaned_log_search_to_bigquery(df_cleaned_data, 'cleaned_log_search')
+    # df_cleaned_data.write.mode("overwrite").option("header", True).partitionBy("date").parquet('./destination_data/cleaned_data/')
 
     keyword_by_user_times_t7 = count_duplicate_keyword_by_user(df_cleaned_t7)
 
     print('----- select distinct keyword to find category ------')
     keyword_distinct = keyword_by_user_times_t6.union(keyword_by_user_times_t7).select("keyword").distinct()
+    # exclude existed keyword
+    existed_keyword_df = read_category_from_bigquery()
+
+    keyword_distinct = keyword_distinct.alias('a').join(existed_keyword_df.alias('b'),on='keyword', how="left_anti")
 
 
-    ## limit keyword api call for testing
+    # limit keyword api call for testing
     keyword_distinct = keyword_distinct.limit(1000)
-    ## end
+    # end
     keyword_category_df = find_movie_category(keyword_distinct)
 
-    keyword_category_df.write.mode("overwrite").option("header", True).partitionBy("category").parquet('./destination_data/keyword_with_category')
-
+    # keyword_category_df.write.mode("overwrite").option("header", True).partitionBy("category").parquet('./destination_data/keyword_with_category')
+    write_table_keyword_category(keyword_category_df)
     df_olap = pivot_olap_table( keyword_by_user_times_t6, keyword_by_user_times_t7, keyword_category_df)
 
     write_to_bigquery(df_olap , BIGQUERY_OLAP_TABLE)
 
+    return
 
 
 if __name__ == "__main__":
