@@ -85,16 +85,16 @@ customer_360-etl_pipeline/
 📈 Sample Output
 ## 📈 Sample Output Schema
 
-| Column         | Type       | Description                                 |
-|----------------|------------|---------------------------------------------|
-| contract       | string     | Unique user identifier                      |
-| giai_tri       | bigint     | Total duration of Entertainment content     |
-| phim_truyen    | bigint     | Total duration of Movie content             |
-| the_thao       | bigint     | Total duration of Sports content            |
-| thieu_nhi      | bigint     | Total duration of Children content          |
-| truyen_hinh    | bigint     | Total duration of TV content                |
-| most_watch     | string     | Most-watched content type                   |
-| taste          | string     | Genres the user interacted with             |
+| Column         | Type    | Description                                 |
+|----------------|---------|---------------------------------------------|
+| contract       | String  | Unique user identifier                      |
+| giai_tri       | Float   | Total duration of Entertainment content     |
+| phim_truyen    | Float   | Total duration of Movie content             |
+| the_thao       | Float   | Total duration of Sports content            |
+| thieu_nhi      | Float   | Total duration of Children content          |
+| truyen_hinh    | Float   | Total duration of TV content                |
+| most_watch     | String  | Most-watched content type                   |
+| taste          | String  | Genres the user interacted with             |
 ## 💡 Sample Output
 
 <img src="./img/sample_user_content_consumption_data.png">
@@ -124,16 +124,16 @@ customer_360-etl_pipeline/
 ### 💾 Step 6: Store Results in BigQuery
 - Final schema: `trending`
 
-## 🧾 Output Table Schema (MySQL)
+## 🧾 Output Table Schema (BigQuery)
 
-| Column           | Type   | Description                                |
-|------------------|--------|--------------------------------------------|
-| user_id          | text   | Unique user identifier                     |
-| most_search_t6   | text   | Most searched keyword in June              |
-| category_t6      | text   | Corresponding category of the June keyword |
-| most_search_t7   | text   | Most searched keyword in July              |
-| category_t7      | text   | Corresponding category of the July keyword |
-| category_change  | text   | 'unchanged' or "changed" if changed        |
+| Column           | Type     | Description                                |
+|------------------|----------|--------------------------------------------|
+| user_id          | String   | Unique user identifier                     |
+| most_search_t6   | String   | Most searched keyword in June              |
+| category_t6      | String   | Corresponding category of the June keyword |
+| most_search_t7   | String   | Most searched keyword in July              |
+| category_t7      | String   | Corresponding category of the July keyword |
+| category_change  | String   | 'unchanged' or "changed" if changed        |
 ## 💡 Sample Output
 <img src="./img/favourite_type_each_user.png">
 
